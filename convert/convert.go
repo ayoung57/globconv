@@ -143,6 +143,11 @@ func RsyncToGitignore(lines []string, opts Options) ([]string, []Warning, error)
 // the only form both gitignore and rsync agree on. A "**" glued to other
 // characters in the same segment (e.g. "a**b") is well defined in neither
 // spec the same way, so in lenient mode it's collapsed to a single "*".
+//
+// A "*" inside a bracket expression (e.g. "a[**]b") is a literal character
+// in both formats, not a wildcard, so it's exempt from this check entirely:
+// bracketSpans finds those ranges and the rest of the function only looks
+// for "**" outside of them.
 func fixDoubleStar(pattern string, lenient bool) (string, []string, error) {
 	segments := strings.Split(pattern, "/")
 	var changes []string
@@ -151,15 +156,87 @@ func fixDoubleStar(pattern string, lenient bool) (string, []string, error) {
 		if seg == "" || seg == "**" || !strings.Contains(seg, "**") {
 			continue
 		}
+
+		spans := bracketSpans(seg)
+		if !strings.Contains(maskSpans(seg, spans), "**") {
+			continue
+		}
+
 		if !lenient {
 			return "", nil, fmt.Errorf("segment %q uses \"**\" outside of its own path segment", seg)
 		}
-		collapsed := runOfStars.ReplaceAllString(seg, "*")
+		collapsed := collapseStarsOutsideBrackets(seg, spans)
 		changes = append(changes, fmt.Sprintf("collapsed %q to %q (\"**\" only has special meaning as a whole path segment)", seg, collapsed))
 		segments[i] = collapsed
 	}
 
 	return strings.Join(segments, "/"), changes, nil
+}
+
+// bracketSpans returns the [start, end) byte ranges of well-formed bracket
+// expressions in seg. A bracket expression starts at "[", optionally
+// followed by a negating "!" or "^", optionally followed by a literal "]"
+// (which doesn't close the expression when it's the first character of the
+// class), and runs up to the next "]". A "[" with no matching "]" isn't a
+// bracket expression at all: both gitignore and rsync fall back to treating
+// it as a literal character, and so does this scan.
+func bracketSpans(seg string) [][2]int {
+	var spans [][2]int
+	i := 0
+	for i < len(seg) {
+		if seg[i] != '[' {
+			i++
+			continue
+		}
+		start := i
+		j := i + 1
+		if j < len(seg) && (seg[j] == '!' || seg[j] == '^') {
+			j++
+		}
+		if j < len(seg) && seg[j] == ']' {
+			j++
+		}
+		for j < len(seg) && seg[j] != ']' {
+			j++
+		}
+		if j >= len(seg) {
+			i++
+			continue
+		}
+		spans = append(spans, [2]int{start, j + 1})
+		i = j + 1
+	}
+	return spans
+}
+
+// maskSpans replaces the bytes covered by spans with a placeholder that
+// can't itself form a "**", so the result can be searched for a glued
+// double-star without false positives from inside a bracket expression.
+func maskSpans(seg string, spans [][2]int) string {
+	if len(spans) == 0 {
+		return seg
+	}
+	b := []byte(seg)
+	for _, sp := range spans {
+		for k := sp[0]; k < sp[1]; k++ {
+			b[k] = '#'
+		}
+	}
+	return string(b)
+}
+
+// collapseStarsOutsideBrackets applies runOfStars to the parts of seg that
+// fall outside spans, leaving bracket expressions untouched.
+func collapseStarsOutsideBrackets(seg string, spans [][2]int) string {
+	var b strings.Builder
+	pos := 0
+	for _, sp := range spans {
+		b.WriteString(runOfStars.ReplaceAllString(seg[pos:sp[0]], "*"))
+		b.WriteString(seg[sp[0]:sp[1]])
+		pos = sp[1]
+	}
+	b.WriteString(runOfStars.ReplaceAllString(seg[pos:], "*"))
+	return b.String()
 }
 
 // trimTrailingGitSpaces applies gitignore's rule that trailing spaces are

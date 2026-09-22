@@ -194,6 +194,78 @@ func TestFixDoubleStar(t *testing.T) {
 	}
 }
 
+func TestFixDoubleStar_StarsInsideBracketsAreLiteral(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+	}{
+		{name: "whole segment is a class of two stars", pattern: "a/[**]/b"},
+		{name: "class glued to the rest of the segment", pattern: "a[**]b"},
+		{name: "negated class with !", pattern: "a[!**]b"},
+		{name: "negated class with ^", pattern: "a[^**]b"},
+		{name: "literal ] as first class member", pattern: "a[]**]b"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, changes, err := fixDoubleStar(tt.pattern, false)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.pattern {
+				t.Errorf("got %q, want %q unchanged", got, tt.pattern)
+			}
+			if len(changes) != 0 {
+				t.Errorf("unexpected changes: %v", changes)
+			}
+		})
+	}
+}
+
+func TestFixDoubleStar_GluedStarOutsideBracketStillErrors(t *testing.T) {
+	_, _, err := fixDoubleStar("a**[b]", false)
+	if err == nil {
+		t.Fatal("expected an error for \"**\" glued outside a bracket expression, got none")
+	}
+
+	got, changes, err := fixDoubleStar("a**[b]", true)
+	if err != nil {
+		t.Fatalf("unexpected error in lenient mode: %v", err)
+	}
+	want := "a*[b]"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("expected exactly one change, got %v", changes)
+	}
+}
+
+func TestFixDoubleStar_UnterminatedBracketIsLiteral(t *testing.T) {
+	// No closing "]", so the "[" is just a literal character and the "**"
+	// after it is a real glued double-star.
+	_, _, err := fixDoubleStar("a[**b", false)
+	if err == nil {
+		t.Fatal("expected an error, got none")
+	}
+}
+
+func TestGitignoreToRsync_BracketExpressionsPassThrough(t *testing.T) {
+	in := []string{"file[**].txt", "[!abc]/dir", "[^0-9]*.go"}
+	want := []string{"- file[**].txt", "- [!abc]/dir", "- [^0-9]*.go"}
+
+	got, warnings, err := GitignoreToRsync(in, Options{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
 func TestTrimTrailingGitSpaces(t *testing.T) {
 	tests := []struct {
 		in   string

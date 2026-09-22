@@ -70,13 +70,19 @@ globconv: line 1: collapsed "a**b" to "a*b" ("**" only has special meaning as a 
 
 ## Known limitations (first pass)
 
-- Bracket expressions (`[abc]`, `[!abc]`) are passed through unchanged;
-  the two formats are assumed compatible but this isn't verified pattern
-  by pattern yet.
 - Escaping inside a pattern beyond a leading `\#`/`\!` and a trailing
   `\ ` is not unescaped or re-escaped.
 - rsync's per-rule modifiers (`-C`, `s`, anchoring with a second `/`, etc.)
   aren't recognized.
+
+Bracket expressions (`[abc]`, `[!abc]`, `[^abc]`) are passed through
+unchanged, and that's been checked, not just assumed: both formats parse a
+class the same way (a leading `!` or `^` negates it, a `]` right after the
+opening bracket is a literal member rather than the close), so a pattern
+that means the same thing in one format means the same thing in the other.
+The one thing this ruled out: a `*` inside a class is a literal character,
+not a wildcard, so `a[**]b` is not a glued `**` and shouldn't be flagged or
+rewritten as one.
 
 ## License
 
